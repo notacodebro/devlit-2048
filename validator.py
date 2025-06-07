@@ -1,4 +1,5 @@
-#!/usr/bin/python3
+#!/opt/homebrew/bin/python3
+import pyfiglet
 import requests
 import json 
 import argparse
@@ -12,19 +13,24 @@ urllib3.disable_warnings()
 BASE_URL = 'https://api.thousandeyes.com'
 
 try:
-    material = open('config', 'r')
+    material = open('.config', 'r')
 except FileNotFoundError:
     print('!!!configuration file missing, create it please!!!!')
     exit(0)
-material =  base64.b64decode(material.read()).decode("utf-8")
+material =  base64.b64decode(material.read()).decode("utf-8").strip()
 HEADERS = {'Content-Type' : 'application/json', 'Authorization' : f'Bearer {material}'}
 
-def current_test_results(testid):
-    url = f'{BASE_URL}/v7/test-results/{testid}/network'
+def fig(text, style='mini', color="HEADER"):
+    text = pyfiglet.figlet_format(text, font=style)
+    print(f'{getattr(bcolors, color)}{text}{bcolors.ENDC}')
+
+
+def gather_test_results(testid):
+    url = f'{BASE_URL}/v7/test-results/{testid}/http-server'
     result = requests.get(url, headers=HEADERS, verify=False)
     result = json.loads(result.text)
     return(result)
-    #print(json.dumps(result, indent=2))
+
 def internet_insights():
     provider_data = {
         "window" : "1d",
@@ -34,6 +40,54 @@ def internet_insights():
     result = requests.post(url, headers=HEADERS, json=provider_data, verify=False)
     result = json.loads(result.text)
 
+def pre_change():
+    _current_test_ids = ['4805920', '4805922', '4805928'] # These ID's need to be added prior to execution 
+    print(f'{bcolors.WARNING}Pre-Change Module{bcolors.ENDC}') 
+    internet_insights()
+    for items in _current_test_ids:
+        result = gather_test_results(items)
+        printer(result)
+
+    
+def post_change():
+    _instant_test_ids = ['7195415', '7195422', '7195425']
+    print(f'{bcolors.WARNING}Post-Change Module{bcolors.ENDC}') 
+    print('*'*64)
+    print('Execututing Instant Tests: ', end="", flush=True )
+    for items in _instant_test_ids:
+        url = f'{BASE_URL}/v7/tests/{items}/run'
+        requests.post(url, headers=HEADERS, verify=False) 
+    print(f'{bcolors.OKGREEN} Complete{bcolors.ENDC}')
+    print('Gathering results(takes ~20 seconds): ', end="", flush=True )
+    time.sleep(25)
+    print(f'{bcolors.OKGREEN} Complete{bcolors.ENDC}')
+    time.sleep(5)
+    for items in _instant_test_ids:
+        result = gather_test_results(items)
+        printer(result)
+
+def printer(result):
+    error_count = 0
+    print('*'*64)
+    print(f'Test Name: {result["test"]["testName"]}')
+    print(f'{bcolors.OKCYAN}Test Target: {result["test"]["url"]}{bcolors.ENDC}')
+    print('*'*64)
+    print('Results')
+    print(f'Test Date: {result["results"][0]["date"]}')
+    #print(result)
+    for items in result['results']:
+        print(f'Test Agent: {items["agent"]["agentName"]}')
+        print(f'Test Errors: {bcolors.OKGREEN if items["errorType"] == "None" else bcolors.FAIL}{items["errorType"]}{bcolors.ENDC}')
+        print(f'Response Code: {bcolors.OKGREEN if items["responseCode"] == 200 else bcolors.FAIL}{items["responseCode"]}{bcolors.ENDC}')
+        print(f'Total Connect Time: {items["connectTime"]}')
+        print('*'*32)
+        if items["responseCode"] != 200: error_count = error_count + 1
+    print('*'*64)
+    if error_count >= 1:
+        fig('Site Health is Compromised', "standard", "FAIL")
+    print('*'*64)
+    x = input('Hit enter to continue')
+           
 def parser():
     _parser = argparse.ArgumentParser()
     _parser.add_argument('-pre', help='pre-validation module', required=False, action='store_true')  
@@ -41,62 +95,9 @@ def parser():
     args = _parser.parse_args() 
     return args 
 
-def pre_change():
-    _current_test_ids = []
-    print('Pre Change Validation Module') 
-    internet_insights()
-    for testid in _current_test_ids:
-        result = current_test_results(testid)
-        print('*'*64)
-        print(f'Test Name: {result["test"]["testName"]}')
-        print(f'Test Target: {result["results"][0]["serverIp"]}')
-        print('*'*64)
-        print('Results')
-        print(f'Test Date: {result["results"][0]["date"]}')
-        for items in result['results']:
-            print(f'Test Agent: {items["agent"]["agentName"]}')
-            if items['loss'] == 0.0:
-                print(f'{bcolors.OKGREEN}Test Loss: {items["loss"]}{bcolors.ENDC}')
-                tloss = 0
-            if items['loss'] >=1:
-                print(f'{bcolors.WARNING}Test Loss: {items["loss"]}{bcolors.ENDC}')
-                tloss = 1
-            if items['loss'] >=40:
-                print(f'{bcolors.FAIL}Test Loss: {items["loss"]}{bcolors.ENDC}')
-                tloss = 2
-        x = input('press enter for more results')
-    if tloss < 1:
-        print(f'{bcolors.OKCYAN}All tests clear! You can proceed with change{bcolors.ENDC}')
-    elif tloss == 1:
-        print(f'{bcolors.FAIL}One or more tests has exhibited issues. Please Investigate{bcolors.ENDC}')
-    post_change()
-    
-def post_change():
-    _instant_test_ids = []
-    print('Post Change Validation Module') 
-    print('*'*64)
-    print('Execututing Instant Tests...')
-    for items in _instant_test_ids:
-        url = f'{BASE_URL}/v7/tests/{items}/run'
-        result = requests.post(url, headers=HEADERS, verify=False)
-    print('Gathering results... This takes about 15-20 seconds')
-    time.sleep(30) 
-    for items in _instant_test_ids:
-        print('*'*64)
-        rurl = f'{BASE_URL}/v7/test-results/{items}/http-server'
-        result = requests.get(rurl, headers=HEADERS, verify=False)
-        result = json.loads(result.text)
-        for items in result["results"]:
-            print(f'Test Target: {result["test"]["url"]}')
-            print(f'Test Agent: {items["agent"]["agentName"]}')
-            print(f'Test Date: {items["date"]}')
-            if items['errorType'] == 'HTTP':
-                print(f'{bcolors.FAIL}Test Errors: {items["errorType"]}{bcolors.ENDC}')
-            else:
-                print(f'{bcolors.OKGREEN}Test Errors: {items["errorType"]}{bcolors.ENDC}')
-        x = input('hit the enter key to see more results')
 def main():
     os.system('clear')
+    fig(".  :  l  : .  :  l  :  .\nChange Validation Tool")
     args = parser()
     if args.pre:
         pre_change()
